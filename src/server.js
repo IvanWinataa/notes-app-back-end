@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const Hapi = require('@hapi/hapi');
+const Jwt = require('@hapi/jwt');
 
 // notes plugin
 const notes = require('./api/notes');
@@ -12,12 +13,19 @@ const users = require('./api/users');
 const UsersService = require('./services/postgres/UsersService');
 const UsersValidator = require('./validator/users');
 
+// authentications plugin
+const authentications = require('./api/authentications');
+const AuthenticationsService = require('./services/postgres/AuthenticationsService');
+const TokenManager = require('./tokenize/TokenManager');
+const AuthenticationsValidator = require('./validator/authentications');
+
 // custom error
 const ClientError = require('./exceptions/ClientError');
 
 const init = async () => {
   const notesService = new NotesService();
-  const usersService = new UsersService(); // ← instance UsersService
+  const usersService = new UsersService();
+  const authenticationsService = new AuthenticationsService();
 
   const server = Hapi.server({
     port: process.env.PORT,
@@ -29,7 +37,31 @@ const init = async () => {
     },
   });
 
-  // Registrasi plugin (notes + users)
+  // register plugin jwt
+  await server.register([
+    {
+      plugin: Jwt,
+    },
+  ]);
+
+  // define jwt strategy
+  server.auth.strategy('notesapp_jwt', 'jwt', {
+    keys: process.env.ACCESS_TOKEN_KEY,
+    verify: {
+      aud: false,
+      iss: false,
+      sub: false,
+      maxAgeSec: process.env.ACCESS_TOKEN_AGE,
+    },
+    validate: (artifacts) => ({
+      isValid: true,
+      credentials: {
+        id: artifacts.decoded.payload.id,
+      },
+    }),
+  });
+
+  // register internal plugins
   await server.register([
     {
       plugin: notes,
@@ -45,13 +77,21 @@ const init = async () => {
         validator: UsersValidator,
       },
     },
+    {
+      plugin: authentications,
+      options: {
+        authenticationsService,
+        usersService,
+        tokenManager: TokenManager,
+        validator: AuthenticationsValidator,
+      },
+    },
   ]);
 
-  // Middleware untuk menangani error response
+  // error handler
   server.ext('onPreResponse', (request, h) => {
     const { response } = request;
 
-    // Error berasal dari ClientError
     if (response instanceof ClientError) {
       const newResponse = h.response({
         status: 'fail',
@@ -61,12 +101,10 @@ const init = async () => {
       return newResponse;
     }
 
-    // Jika bukan error dari Hapi atau Boom
     if (!response.isBoom) {
       return h.continue;
     }
 
-    // Error server (status 500)
     const newResponse = h.response({
       status: 'error',
       message: 'Maaf, terjadi kegagalan pada server kami.',

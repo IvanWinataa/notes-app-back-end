@@ -3,6 +3,7 @@ const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const InvariantError = require('../../exceptions/InvariantError');
 const NotFoundError = require('../../exceptions/NotFoundError');
+const AuthenticationError = require('../../exceptions/AuthenticationError'); // <— WAJIB ADA
 
 class UsersService {
   constructor() {
@@ -10,7 +11,6 @@ class UsersService {
     this._pool = new Pool();
   }
 
-  // Fungsi menambahkan user baru
   async addUser({ username, password, fullname }) {
     // 1. Pastikan username belum dipakai
     await this.verifyNewUsername(username);
@@ -37,7 +37,6 @@ class UsersService {
     return result.rows[0].id;
   }
 
-  // Mengecek apakah username sudah digunakan
   async verifyNewUsername(username) {
     const query = {
       text: 'SELECT username FROM users WHERE username = $1',
@@ -51,7 +50,6 @@ class UsersService {
     }
   }
 
-  // Fungsi mendapatkan user berdasarkan ID
   async getUserById(userId) {
     const query = {
       text: 'SELECT id, username, fullname FROM users WHERE id = $1',
@@ -60,17 +58,37 @@ class UsersService {
 
     const result = await this._pool.query(query);
 
-    // Jika user tidak ditemukan
     if (!result.rows.length) {
       throw new NotFoundError('User tidak ditemukan');
     }
 
-    // Mengembalikan user
     return result.rows[0];
+  }
+
+  async verifyUserCredential(username, password) {
+    const query = {
+      text: 'SELECT id, password FROM users WHERE username = $1',
+      values: [username],
+    };
+
+    const result = await this._pool.query(query);
+
+    // Jika user tidak ditemukan berdasarkan username
+    if (!result.rows.length) {
+      throw new AuthenticationError('Kredensial yang Anda berikan salah');
+    }
+
+    const { id, password: hashedPassword } = result.rows[0];
+
+    // Bandingkan password asli dengan password hashed di database
+    const match = await bcrypt.compare(password, hashedPassword);
+
+    if (!match) {
+      throw new AuthenticationError('Kredensial yang Anda berikan salah');
+    }
+
+    return id; // Jika sukses, kembalikan id user
   }
 }
 
 module.exports = UsersService;
-
-
-
