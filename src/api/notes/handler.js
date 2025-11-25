@@ -23,7 +23,7 @@ class NotesHandler {
         title,
         body,
         tags,
-        owner: credentialId,   // <-- tambahkan owner
+        owner: credentialId,
       });
 
       const response = h.response({
@@ -72,8 +72,8 @@ class NotesHandler {
       const { id } = request.params;
       const { id: credentialId } = request.auth.credentials;
 
-      // cek apakah user pemilik catatan
-      await this._service.verifyNoteOwner(id, credentialId);
+      // gunakan verifyNoteAccess
+      await this._service.verifyNoteAccess(id, credentialId);
 
       const note = await this._service.getNoteById(id);
 
@@ -111,8 +111,8 @@ class NotesHandler {
       const { id } = request.params;
       const { id: credentialId } = request.auth.credentials;
 
-      // cek apakah user pemilik catatan
-      await this._service.verifyNoteOwner(id, credentialId);
+      // gunakan verifyNoteAccess
+      await this._service.verifyNoteAccess(id, credentialId);
 
       await this._service.editNoteById(id, request.payload);
 
@@ -148,7 +148,7 @@ class NotesHandler {
       const { id } = request.params;
       const { id: credentialId } = request.auth.credentials;
 
-      // cek apakah user pemilik catatan
+      // delete tetap verifyNoteOwner (bukan verifyNoteAccess)
       await this._service.verifyNoteOwner(id, credentialId);
 
       await this._service.deleteNoteById(id);

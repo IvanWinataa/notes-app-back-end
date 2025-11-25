@@ -1,92 +1,125 @@
+const { Pool } = require('pg');
 const { nanoid } = require('nanoid');
 const InvariantError = require('../../exceptions/InvariantError');
 const NotFoundError = require('../../exceptions/NotFoundError');
 const AuthorizationError = require('../../exceptions/AuthorizationError');
-const { mapDBToModel } = require('../../utils'); // jika tidak punya, hapus baris ini
-
+const { mapDBToModel } = require('../../utils');
 
 class NotesService {
-  constructor() {
-    this._notes = [];
+  constructor(collaborationService) {
+    this._pool = new Pool();
+    this._collaborationService = collaborationService;
   }
 
-  addNote({ title, body, tags, owner }) {
+  async addNote({ title, body, tags, owner }) {
     const id = nanoid(16);
     const createdAt = new Date().toISOString();
     const updatedAt = createdAt;
 
-    const newNote = {
-      id,
-      title,
-      body,
-      tags,
-      createdAt,
-      updatedAt,
-      owner,
+    const query = {
+      text: 'INSERT INTO notes VALUES($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+      values: [id, title, body, tags, createdAt, updatedAt, owner],
     };
 
-    this._notes.push(newNote);
+    const result = await this._pool.query(query);
 
-    const isSuccess = this._notes.filter((note) => note.id === id).length > 0;
-
-    if (!isSuccess) {
-      throw new InvariantError("Catatan gagal ditambahkan");
+    if (!result.rows[0].id) {
+      throw new InvariantError('Catatan gagal ditambahkan');
     }
 
-    return id;
+    return result.rows[0].id;
   }
 
-  getNotes(owner) {
-    const notes = this._notes.filter((note) => note.owner === owner);
-    return notes;
+  async getNotes(owner) {
+    const query = {
+      text: `SELECT notes.* FROM notes
+      LEFT JOIN collaborations ON collaborations.note_id = notes.id
+      WHERE notes.owner = $1 OR collaborations.user_id = $1
+      GROUP BY notes.id`,
+      values: [owner],
+    };
+
+    const result = await this._pool.query(query);
+    return result.rows.map(mapDBToModel);
   }
 
-  getNoteById(id) {
-    const note = this._notes.find((n) => n.id === id);
-
-    if (!note) {
-      throw new NotFoundError("Catatan tidak ditemukan");
-    }
-
-    return note;
+async getNoteById(id) {
+  const query = {
+    text: `SELECT notes.*, users.username
+    FROM notes
+    LEFT JOIN users ON users.id = notes.owner
+    WHERE notes.id = $1`,
+    values: [id],
+  };
+  const result = await this._pool.query(query);
+ 
+  if (!result.rows.length) {
+    throw new NotFoundError('Catatan tidak ditemukan');
   }
+ 
+  return result.rows.map(mapDBToModel)[0];
+}
 
-  editNoteById(id, { title, body, tags }) {
-    const index = this._notes.findIndex((note) => note.id === id);
-
-    if (index === -1) {
-      throw new NotFoundError("Gagal memperbarui catatan. Id tidak ditemukan");
-    }
-
+  async editNoteById(id, { title, body, tags }) {
     const updatedAt = new Date().toISOString();
 
-    this._notes[index] = {
-      ...this._notes[index],
-      title,
-      body,
-      tags,
-      updatedAt,
+    const query = {
+      text: 'UPDATE notes SET title = $1, body = $2, tags = $3, updated_at = $4 WHERE id = $5 RETURNING id',
+      values: [title, body, tags, updatedAt, id],
     };
-  }
 
-  deleteNoteById(id) {
-    const index = this._notes.findIndex((note) => note.id === id);
+    const result = await this._pool.query(query);
 
-    if (index === -1) {
-      throw new NotFoundError("Catatan gagal dihapus. Id tidak ditemukan");
+    if (!result.rowCount) {
+      throw new NotFoundError('Gagal memperbarui catatan. Id tidak ditemukan');
     }
-
-    this._notes.splice(index, 1);
   }
+
+  async deleteNoteById(id) {
+    const query = {
+      text: 'DELETE FROM notes WHERE id = $1 RETURNING id',
+      values: [id],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new NotFoundError('Catatan gagal dihapus. Id tidak ditemukan');
+    }
+  }
+
   async verifyNoteOwner(id, owner) {
-    const note = this._notes.find((n) => n.id === id);
+    const query = {
+      text: 'SELECT * FROM notes WHERE id = $1',
+      values: [id],
+    };
 
-    if (!note) {
-      throw new NotFoundError("Resource yang Anda minta tidak ditemukan");
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new NotFoundError('Resource yang Anda minta tidak ditemukan');
     }
+
+    const note = result.rows[0];
 
     if (note.owner !== owner) {
-      throw new AuthorizationError("Anda tidak berhak mengakses resource ini");
+      throw new AuthorizationError('Anda tidak berhak mengakses resource ini');
+    }
+  }
+
+  async verifyNoteAccess(noteId, userId) {
+    try {
+      await this.verifyNoteOwner(noteId, userId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw error;
+      }
+
+      try {
+        await this._collaborationService.verifyCollaborator(noteId, userId);
+      } catch {
+        throw error;
+      }
     }
   }
 }
